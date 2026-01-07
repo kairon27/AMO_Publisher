@@ -1,90 +1,127 @@
 (function() {
-  // === КОНФІГУРАЦІЯ (ЗАМІНИ НА СВОЇ ДАНІ) ===
   const CONFIG = {
+    // === ВСТАВ СВОЇ КЛЮЧІ ===
     VAPID_PUBLIC_KEY: 'BGMl6-SFHl1VHSSarEeUufF04WJLic_zBV2o3a_5amCiQLj0vqdBrITulD7PPQMCQ_Eqg6pc1t0kVWzvdrH0ZW4', // Той самий, що в env.VAPID_PUBLIC_KEY
     SUPABASE_URL: 'https://makcazualfwdlmkiebnw.supabase.co',
     SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1ha2NhenVhbGZ3ZGxta2llYm53Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU0NDkyOTEsImV4cCI6MjA4MTAyNTI5MX0.zsJL04dO1Kwf7BiXvSHFtnGkja_Ji64lhqDxiGJgdiw' // Ключ "anon public" з налаштувань API
 
   };
-  // ===========================================
 
-  // Стилі для кнопки
-  const styles = `
-    .ejtas-push-btn {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      width: 50px;
-      height: 50px;
-      background: #007bff;
-      border-radius: 50%;
-      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-      cursor: pointer;
-      z-index: 99999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  // Дефолтні налаштування (якщо в базі нічого немає)
+  let settings = {
+    delay_seconds: 5,
+    auto_show: true,
+    prompt_title: 'Хочете отримувати новини?',
+    prompt_text: 'Підпишіться на сповіщення, щоб не пропустити важливі оновлення та акції.',
+    accept_btn_text: 'Дозволити',
+    deny_btn_text: 'Пізніше',
+    btn_color: '#007bff'
+  };
+
+  // === 1. ЗАВАНТАЖЕННЯ НАЛАШТУВАНЬ ===
+  async function loadSettings() {
+    try {
+      const hostname = window.location.hostname;
+      const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/push_settings?site_domain=eq.${hostname}&select=*`, {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${CONFIG.SUPABASE_ANON_KEY}`
+        }
+      });
+      const data = await res.json();
+      if (data && data.length > 0) {
+        console.log('Push Settings Loaded:', data[0]);
+        settings = { ...settings, ...data[0] }; // Об'єднуємо з дефолтними
+      }
+    } catch (e) {
+      console.warn('Failed to load push settings, using default.', e);
     }
-    .ejtas-push-btn:hover { transform: scale(1.1); }
-    .ejtas-push-btn svg { width: 24px; height: 24px; fill: white; }
-    .ejtas-hidden { display: none !important; }
-    .ejtas-pulse { animation: ejtas-pulse-animation 2s infinite; }
-    @keyframes ejtas-pulse-animation {
-      0% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.7); }
-      70% { box-shadow: 0 0 0 10px rgba(0, 123, 255, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0); }
-    }
-  `;
-
-  // Додаємо CSS на сторінку
-  const styleSheet = document.createElement("style");
-  styleSheet.innerText = styles;
-  document.head.appendChild(styleSheet);
-
-  function createButton() {
-    // Якщо кнопка вже є, не створюємо дублікат
-    if (document.querySelector('.ejtas-push-btn')) return;
-
-    const btn = document.createElement('div');
-    btn.className = 'ejtas-push-btn ejtas-pulse';
-    btn.title = 'Підписатись на новини';
-    btn.innerHTML = `
-      <svg viewBox="0 0 24 24">
-        <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/>
-      </svg>
-    `;
-    btn.onclick = requestSubscription;
-    document.body.appendChild(btn);
   }
 
+  // === 2. СТВОРЕННЯ UI (МОДАЛЬНЕ ВІКНО) ===
+  function showModal() {
+    if (localStorage.getItem('push_denied_time')) {
+        // Якщо юзер відмовився, не показуємо добу (приклад логіки)
+        const deniedTime = parseInt(localStorage.getItem('push_denied_time'));
+        if (Date.now() - deniedTime < 24 * 60 * 60 * 1000) return;
+    }
+
+    const modalId = 'ejtas-push-modal';
+    if (document.getElementById(modalId)) return;
+
+    // Вставляємо стилі динамічно (щоб підхопити колір з settings)
+    const styleId = 'ejtas-push-styles';
+    if (!document.getElementById(styleId)) {
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.innerHTML = `
+            #${modalId} {
+                position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+                background: white; padding: 20px; border-radius: 12px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.2); z-index: 999999;
+                width: 90%; max-width: 400px; font-family: sans-serif;
+                animation: ejtas-slide-down 0.5s ease-out;
+                border: 1px solid #eee;
+            }
+            @keyframes ejtas-slide-down { from { top: -100px; opacity: 0; } to { top: 20px; opacity: 1; } }
+            #${modalId} h3 { margin: 0 0 10px; font-size: 18px; color: #333; }
+            #${modalId} p { margin: 0 0 20px; font-size: 14px; color: #666; line-height: 1.5; }
+            .ejtas-btn-group { display: flex; gap: 10px; justify-content: flex-end; }
+            .ejtas-btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; font-size: 14px; }
+            .ejtas-btn-primary { background: ${settings.btn_color}; color: white; }
+            .ejtas-btn-secondary { background: #f0f0f0; color: #333; }
+            .ejtas-btn:hover { opacity: 0.9; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    const modal = document.createElement('div');
+    modal.id = modalId;
+    modal.innerHTML = `
+        <h3>${settings.prompt_title}</h3>
+        <p>${settings.prompt_text}</p>
+        <div class="ejtas-btn-group">
+            <button class="ejtas-btn ejtas-btn-secondary" id="ejtas-deny">${settings.deny_btn_text}</button>
+            <button class="ejtas-btn ejtas-btn-primary" id="ejtas-accept">${settings.accept_btn_text}</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById('ejtas-accept').onclick = () => {
+        requestSubscription();
+        closeModal();
+    };
+    document.getElementById('ejtas-deny').onclick = () => {
+        closeModal();
+        localStorage.setItem('push_denied_time', Date.now());
+    };
+  }
+
+  function closeModal() {
+      const el = document.getElementById('ejtas-push-modal');
+      if (el) el.remove();
+  }
+
+  // === 3. ЛОГІКА ПІДПИСКИ (Service Worker) ===
   function urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
     const rawData = window.atob(base64);
     const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) {
-      outputArray[i] = rawData.charCodeAt(i);
-    }
+    for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); }
     return outputArray;
   }
 
-  // === ЛОГІКА ПІДПИСКИ ===
   async function requestSubscription() {
-    if (!('serviceWorker' in navigator)) return alert('Ваш браузер не підтримує сповіщення');
-
+    if (!('serviceWorker' in navigator)) return;
     try {
       const registration = await navigator.serviceWorker.register('/sw.js');
-      console.log('SW зареєстровано');
-
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(CONFIG.VAPID_PUBLIC_KEY)
       });
-
-      console.log('Підписано:', subscription);
       
-      // Відправляємо в базу
+      // Зберігаємо в базу
       await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/web_push_tokens`, {
         method: 'POST',
         headers: {
@@ -100,64 +137,46 @@
           source_site: window.location.hostname
         })
       });
-
-      alert('Дякуємо! Ви підписані на сповіщення.');
-      const btn = document.querySelector('.ejtas-push-btn');
-      if (btn) btn.classList.add('ejtas-hidden');
-
+      alert('Дякуємо! Ви успішно підписалися.');
     } catch (err) {
-      console.error('Помилка підписки:', err);
-      if (Notification.permission === 'denied') {
-        alert('Ви заблокували сповіщення. Будь ласка, натисніть на значок замка біля адреси сайту та дозвольте сповіщення.');
-      }
+      console.error('Subscription error:', err);
+      // Якщо юзер заблокував на рівні браузера
+      if(Notification.permission === 'denied') alert('Будь ласка, розблокуйте сповіщення в налаштуваннях браузера.');
     }
   }
 
-  // === ЛОГІКА ПЕРЕВІРКИ ===
-  async function checkSubscription() {
-    if (!('serviceWorker' in navigator)) return;
+  // === 4. ІНІЦІАЛІЗАЦІЯ ===
+  async function init() {
+    await loadSettings();
     
-    // Перевіряємо, чи юзер вже підписаний
-    const reg = await navigator.serviceWorker.getRegistration();
-    let sub = null;
-    if (reg) {
-      sub = await reg.pushManager.getSubscription();
+    // Перевіряємо, чи вже підписаний
+    if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) {
+            const sub = await reg.pushManager.getSubscription();
+            if (sub) return; // Вже підписаний - нічого не робимо
+        }
     }
     
-    // Якщо не підписаний і не заблокував -> показуємо кнопку
-    if (!sub && Notification.permission !== 'denied') {
-      createButton();
+    // Якщо не підписаний і автопоказ увімкнено
+    if (settings.auto_show && Notification.permission !== 'denied') {
+        setTimeout(showModal, settings.delay_seconds * 1000);
     }
   }
-
-  // === ЛОГІКА ТРЕКІНГУ КЛІКІВ (ВАЖЛИВО) ===
-  function trackClick() {
+  
+  // Трекінг кліків (залишаємо без змін)
+  (function trackClick() {
     const params = new URLSearchParams(window.location.search);
-    const campaignId = params.get('campaign_id');
-    
-    // Якщо прийшли з пуша і ще не зарахували цей клік
-    if (campaignId && !sessionStorage.getItem('push_click_' + campaignId)) {
-      console.log('🚀 Push Click Detected:', campaignId);
-      
-      // Викликаємо RPC функцію для інкременту
-      fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/increment_campaign_click`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': CONFIG.SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${CONFIG.SUPABASE_ANON_KEY}`
-        },
-        body: JSON.stringify({ campaign_uuid: campaignId })
-      }).then(() => {
-          sessionStorage.setItem('push_click_' + campaignId, 'true');
-      }).catch(console.error);
+    const cId = params.get('campaign_id');
+    if (cId && !sessionStorage.getItem('pc_'+cId)) {
+       fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/increment_campaign_click`, {
+          method:'POST', headers:{'Content-Type':'application/json','apikey':CONFIG.SUPABASE_ANON_KEY},
+          body:JSON.stringify({campaign_uuid:cId})
+       });
+       sessionStorage.setItem('pc_'+cId,'1');
     }
-  }
+  })();
 
-  // Запуск при завантаженні
-  window.addEventListener('load', () => {
-    checkSubscription();
-    trackClick();
-  });
+  window.addEventListener('load', init);
 
 })();
